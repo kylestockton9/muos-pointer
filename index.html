@@ -1,0 +1,630 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MUOS Antenna Pointing Calculator</title>
+<meta name="description" content="Azimuth and elevation look angles from your position to the MUOS satellite constellation.">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  :root {
+    --bg: #07111f; --panel: #0d1b2e; --panel-2: #12243c; --line: #1e3654;
+    --text: #e6eef8; --muted: #8aa0ba; --stripe: #ff5a36; --signal: #5fd4ff;
+    --good: #4ade80; --warn: #fbbf24; --bad: #f87171;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 14px;
+    padding: 18px 24px; border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, #0c1a2e, var(--bg));
+  }
+  .stripe { display: flex; gap: 4px; transform: skewX(-26deg); height: 34px; flex: none; }
+  .stripe i { display: block; height: 100%; }
+  .stripe i:nth-child(1) { width: 14px; background: var(--stripe); }
+  .stripe i:nth-child(2) { width: 4px; background: #fff; }
+  .stripe i:nth-child(3) { width: 5px; background: #2f6fd6; }
+  h1 { font-size: 20px; margin: 0; letter-spacing: .01em; }
+  header p { margin: 0; color: var(--muted); font-size: 13px; }
+
+  main {
+    max-width: 1240px; margin: 0 auto; padding: 20px 16px 8px;
+    display: grid; gap: 16px;
+    grid-template-columns: 380px minmax(0, 1fr);
+    grid-template-areas: "inputs map" "results scene";
+  }
+  #inputs { grid-area: inputs; display: grid; gap: 16px; align-content: start; }
+  #mapCard { grid-area: map; }
+  #results { grid-area: results; }
+  #sceneCard { grid-area: scene; }
+  @media (max-width: 900px) {
+    main { grid-template-columns: minmax(0, 1fr); grid-template-areas: "inputs" "map" "results" "scene"; }
+  }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .card h2 {
+    margin: 0 0 12px; font-size: 12px; font-weight: 600; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--muted); display: flex; gap: 8px; align-items: center;
+  }
+  .step {
+    display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%;
+    background: var(--stripe); color: #fff; font-size: 11px; letter-spacing: 0;
+  }
+
+  .sats { display: grid; gap: 8px; }
+  .sat {
+    display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: center;
+    width: 100%; text-align: left; padding: 10px 12px; border-radius: 8px; cursor: pointer;
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--text); font: inherit;
+  }
+  .sat:hover { border-color: #35608f; }
+  .sat[aria-pressed="true"] { border-color: var(--signal); box-shadow: 0 0 0 1px var(--signal) inset; background: #132c47; }
+  .sat b { font-weight: 600; }
+  .sat small { color: var(--muted); grid-column: 1; }
+  .sat .el { grid-column: 2; grid-row: 1 / span 2; font-family: var(--mono); font-size: 13px; padding: 3px 8px; border-radius: 999px; background: #0a1626; white-space: nowrap; }
+  .el.good { color: var(--good); } .el.warn { color: var(--warn); } .el.bad { color: var(--bad); }
+  .custom { display: flex; gap: 8px; align-items: center; margin-top: 10px; font-size: 13px; color: var(--muted); }
+  .custom input { flex: 1; }
+
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  input, select {
+    width: 100%; padding: 9px 10px; border-radius: 8px; border: 1px solid var(--line);
+    background: #0a1626; color: var(--text); font: 14px var(--mono);
+  }
+  input:focus, select:focus, button:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
+  input.invalid { border-color: var(--bad); }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .echo { font: 12px var(--mono); color: var(--muted); min-height: 18px; margin-top: 3px; }
+  .echo.err { color: var(--bad); }
+  .hint { font-size: 12px; color: var(--muted); margin: 10px 0 0; }
+  .btn {
+    margin-top: 10px; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--panel-2); color: var(--text); font: inherit; font-size: 13px; cursor: pointer;
+  }
+  .btn:hover { border-color: #35608f; }
+  .var { display: grid; grid-template-columns: 1fr 80px; gap: 8px; }
+
+  #map { height: 100%; min-height: 430px; border-radius: 8px; background: #0a1626; }
+  #mapCard { display: flex; flex-direction: column; }
+  #mapCard .mapwrap { flex: 1; min-height: 430px; }
+  .leaflet-container { font: inherit; background: #0a1626; }
+  .tiles-dark { filter: invert(1) hue-rotate(180deg) brightness(.9) contrast(.9) saturate(.7); }
+  .pin { width: 18px; height: 18px; border-radius: 50%; background: var(--stripe); border: 3px solid #fff; box-shadow: 0 0 0 4px rgba(255,90,54,.3); }
+  .satpin { color: #ffd27a; font: 600 11px system-ui, sans-serif; white-space: nowrap; text-shadow: 0 0 4px #000, 0 0 4px #000; transform: translate(-50%, -50%); text-align: center; opacity: .6; }
+  .satpin.on { opacity: 1; color: var(--signal); }
+  .satpin span { display: block; font-size: 18px; line-height: 1; }
+
+  .readouts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .ro { background: #0a1626; border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+  .ro .k { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+  .ro .v { font: 600 34px/1.15 var(--mono); color: #fff; font-variant-numeric: tabular-nums; }
+  .ro .v sup { font-size: 14px; color: var(--muted); font-weight: 400; margin-left: 4px; }
+  .ro .s { font: 12px var(--mono); color: var(--muted); min-height: 18px; }
+  .status { margin-top: 10px; padding: 10px 12px; border-radius: 8px; font-size: 13px; border: 1px solid; }
+  .status.good { color: var(--good); border-color: #1f5c3a; background: #0c2218; }
+  .status.warn { color: var(--warn); border-color: #6b5215; background: #231c0a; }
+  .status.bad { color: var(--bad); border-color: #6b2222; background: #260f0f; }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 12px 0 0; font-size: 13px; }
+  dt { color: var(--muted); } dd { margin: 0; font-family: var(--mono); text-align: right; }
+
+  #sceneCard { padding: 0; overflow: hidden; position: relative; min-height: 400px; }
+  #scene { display: block; width: 100%; height: 100%; min-height: 400px; }
+
+  footer { max-width: 1240px; margin: 0 auto; padding: 8px 16px 28px; color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="stripe" aria-hidden="true"><i></i><i></i><i></i></div>
+  <div>
+    <h1>MUOS Antenna Pointing Calculator</h1>
+    <p>Azimuth and elevation look angles for directional UHF SATCOM antennas</p>
+  </div>
+</header>
+
+<main>
+  <div id="inputs">
+    <section class="card">
+      <h2><span class="step">1</span> Choose satellite</h2>
+      <div class="sats" id="sats"></div>
+      <div class="custom">
+        <span>Other slot:</span>
+        <input id="customLon" placeholder="e.g. 105 W" aria-label="Custom satellite longitude">
+      </div>
+      <div class="echo" id="customEcho"></div>
+    </section>
+
+    <section class="card">
+      <h2><span class="step">2</span> Your position</h2>
+      <div class="row">
+        <div>
+          <label for="lat">Latitude</label>
+          <input id="lat" placeholder="36 51.2 N" autocomplete="off">
+          <div class="echo" id="latEcho"></div>
+        </div>
+        <div>
+          <label for="lon">Longitude</label>
+          <input id="lon" placeholder="075 30.0 W" autocomplete="off">
+          <div class="echo" id="lonEcho"></div>
+        </div>
+      </div>
+      <div style="margin-top:8px">
+        <label for="varDeg">Magnetic variation (optional, from chart)</label>
+        <div class="var">
+          <input id="varDeg" placeholder="e.g. 11.5" inputmode="decimal" autocomplete="off">
+          <select id="varDir" aria-label="Variation direction"><option>W</option><option>E</option></select>
+        </div>
+      </div>
+      <button class="btn" id="geo" type="button">Use my device location</button>
+      <p class="hint">Accepts decimal degrees (36.853, -75.5), degrees + decimal minutes (36 51.2 N) or D M S. Or click the map to drop a pin.</p>
+    </section>
+  </div>
+
+  <section class="card" id="mapCard">
+    <h2>Drop a pin</h2>
+    <div class="mapwrap"><div id="map"></div></div>
+  </section>
+
+  <section class="card" id="results" aria-live="polite">
+    <h2>Pointing solution</h2>
+    <div class="readouts">
+      <div class="ro"><div class="k">Azimuth</div><div class="v" id="azV">—</div><div class="s" id="azS"></div></div>
+      <div class="ro"><div class="k">Elevation</div><div class="v" id="elV">—</div><div class="s" id="elS"></div></div>
+    </div>
+    <div class="status" id="status"></div>
+    <dl>
+      <dt>Satellite</dt><dd id="dSat"></dd>
+      <dt>Position</dt><dd id="dPos"></dd>
+      <dt>Slant range</dt><dd id="dRange"></dd>
+      <dt>One-way delay</dt><dd id="dDelay"></dd>
+    </dl>
+  </section>
+
+  <section class="card" id="sceneCard">
+    <canvas id="scene" role="img" aria-label="Animation of a cutter transmitting to the selected satellite"></canvas>
+  </section>
+</main>
+
+<footer>
+  Unofficial planning aid — not affiliated with or endorsed by the U.S. Coast Guard or U.S. Space Force.
+  Uses publicly reported nominal geostationary slots and a spherical-Earth model; MUOS spacecraft fly slightly inclined
+  orbits, so true look angles drift a few degrees over the day. Verify against current SATCOM guidance. All calculations run in your browser; your position is never transmitted.
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+(() => {
+  'use strict';
+  // ---------- Constants & data ----------
+  const RE = 6378.137, RS = 42164.17, C = 299792.458;
+  const HORIZON_GAMMA = Math.acos(RE / RS); // central angle at 0° elevation
+  const SATS = [
+    { id: 'pac', name: 'MUOS-1', region: 'Pacific', lon: -177 },
+    { id: 'conus', name: 'MUOS-2', region: 'CONUS / Americas', lon: -100 },
+    { id: 'lant', name: 'MUOS-3', region: 'Atlantic', lon: -15.5 },
+    { id: 'io', name: 'MUOS-4', region: 'Indian Ocean', lon: 75 },
+  ];
+  const state = { satId: 'conus', satLon: -100, satLabel: '', lat: 36.8533, lon: -75.5, variation: null };
+
+  const rad = d => d * Math.PI / 180, deg = r => r * 180 / Math.PI;
+  const norm180 = d => ((d + 540) % 360 + 360) % 360 - 180;
+  const $ = id => document.getElementById(id);
+
+  // ---------- Look-angle math ----------
+  function look(lat, lon, satLon) {
+    const p = rad(lat), d = rad(norm180(satLon - lon));
+    const cosg = Math.cos(p) * Math.cos(d);
+    const sing = Math.sqrt(Math.max(0, 1 - cosg * cosg));
+    const el = deg(Math.atan2(cosg - RE / RS, sing));
+    const az = (deg(Math.atan2(Math.sin(d), -Math.sin(p) * Math.cos(d))) + 360) % 360;
+    const range = Math.sqrt(RE * RE + RS * RS - 2 * RE * RS * cosg);
+    return { az, el, range, overhead: sing < 1e-6 };
+  }
+
+  // ---------- Coordinate parsing / formatting ----------
+  function parseCoord(str, isLat) {
+    const s = String(str).trim().toUpperCase();
+    if (!s) return null;
+    const hem = s.match(/[NSEW]/g) || [];
+    if (hem.length > 1 || /[A-DF-MO-RT-VX-Z]/.test(s)) return NaN;
+    if (hem[0] && (isLat ? !/[NS]/.test(hem[0]) : !/[EW]/.test(hem[0]))) return NaN;
+    const nums = s.match(/\d+(?:\.\d+)?|\.\d+/g);
+    if (!nums || nums.length > 3) return NaN;
+    const [d, m = 0, sec = 0] = nums.map(Number);
+    if (m >= 60 || sec >= 60) return NaN;
+    if (nums.length > 1 && nums.slice(0, -1).some(n => n.includes('.'))) return NaN;
+    let v = d + m / 60 + sec / 3600;
+    const neg = /^\s*-/.test(s);
+    if (neg && hem[0]) return NaN;
+    if (neg || hem[0] === 'S' || hem[0] === 'W') v = -v;
+    if (Math.abs(v) > (isLat ? 90 : 180)) return NaN;
+    return v;
+  }
+  function fmtDDM(v, isLat) {
+    const h = isLat ? (v < 0 ? 'S' : 'N') : (v < 0 ? 'W' : 'E');
+    let a = Math.abs(v), d = Math.floor(a), m = (a - d) * 60;
+    if (m >= 59.995) { d += 1; m = 0; }
+    return `${String(d).padStart(isLat ? 2 : 3, '0')}° ${m.toFixed(2).padStart(5, '0')}' ${h}`;
+  }
+  const fmtLon = v => `${Math.abs(v).toFixed(1).replace(/\.0$/, '')}° ${v < 0 ? 'W' : 'E'}`;
+  const elClass = el => el < 0 ? 'bad' : el < 10 ? 'warn' : 'good';
+
+  // ---------- Satellite picker ----------
+  const satsEl = $('sats');
+  SATS.forEach(s => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'sat'; b.dataset.id = s.id;
+    b.innerHTML = `<b>${s.name} · ${s.region}</b><small>${fmtLon(s.lon)}</small><span class="el"></span>`;
+    b.addEventListener('click', () => {
+      state.satId = s.id; state.satLon = s.lon;
+      $('customLon').value = ''; $('customLon').classList.remove('invalid'); $('customEcho').textContent = '';
+      update();
+    });
+    satsEl.appendChild(b);
+  });
+  $('customLon').addEventListener('input', e => {
+    const v = parseCoord(e.target.value, false), echo = $('customEcho');
+    e.target.classList.toggle('invalid', Number.isNaN(v));
+    echo.className = 'echo' + (Number.isNaN(v) ? ' err' : '');
+    if (v === null) { echo.textContent = ''; return; }
+    if (Number.isNaN(v)) { echo.textContent = 'Enter a longitude such as 105 W or -105'; return; }
+    echo.textContent = `Using geostationary slot at ${fmtLon(v)}`;
+    state.satId = 'custom'; state.satLon = v; update();
+  });
+
+  // ---------- Position inputs ----------
+  function readPos() {
+    const la = parseCoord($('lat').value, true), lo = parseCoord($('lon').value, false);
+    showEcho('lat', la, true); showEcho('lon', lo, false);
+    if (typeof la === 'number' && !Number.isNaN(la) && typeof lo === 'number' && !Number.isNaN(lo)) {
+      state.lat = la; state.lon = lo; update(true);
+    }
+  }
+  function showEcho(id, v, isLat) {
+    const echo = $(id + 'Echo'), bad = Number.isNaN(v);
+    $(id).classList.toggle('invalid', bad);
+    echo.className = 'echo' + (bad ? ' err' : '');
+    echo.textContent = v === null ? '' : bad ? (isLat ? 'Not a valid latitude' : 'Not a valid longitude')
+      : `${Math.abs(v).toFixed(4)}° ${isLat ? (v < 0 ? 'S' : 'N') : (v < 0 ? 'W' : 'E')}`;
+  }
+  function setPos(lat, lon, pan) {
+    state.lat = Math.max(-90, Math.min(90, lat)); state.lon = norm180(lon);
+    $('lat').value = fmtDDM(state.lat, true); $('lon').value = fmtDDM(state.lon, false);
+    showEcho('lat', state.lat, true); showEcho('lon', state.lon, false);
+    update(pan);
+  }
+  $('lat').addEventListener('input', readPos);
+  $('lon').addEventListener('input', readPos);
+  function readVar() {
+    const t = $('varDeg').value.trim(), v = Number(t);
+    const ok = t !== '' && Number.isFinite(v) && v >= 0 && v <= 180;
+    $('varDeg').classList.toggle('invalid', t !== '' && !ok);
+    state.variation = ok ? ($('varDir').value === 'W' ? -v : v) : null;
+    update();
+  }
+  $('varDeg').addEventListener('input', readVar);
+  $('varDir').addEventListener('change', readVar);
+  $('geo').addEventListener('click', () => {
+    const b = $('geo');
+    if (!navigator.geolocation) { b.textContent = 'Location not available on this device'; return; }
+    b.textContent = 'Locating…';
+    navigator.geolocation.getCurrentPosition(
+      p => { b.textContent = 'Use my device location'; setPos(p.coords.latitude, p.coords.longitude, true); },
+      () => { b.textContent = 'Location unavailable — enter manually'; },
+      { enableHighAccuracy: true, timeout: 15000 });
+  });
+
+  // ---------- Map ----------
+  let map, pin, overlay, satMarkers = [];
+  if (window.L) {
+    map = L.map('map', { worldCopyJump: true, minZoom: 2, scrollWheelZoom: false, maxBounds: [[-85, -540], [85, 540]] }).setView([state.lat, state.lon], 3);
+    // wheel-zoom only after the user has clicked into the map, so page scrolling isn't hijacked
+    map.on('click', () => map.scrollWheelZoom.enable());
+    map.on('mouseout', () => map.scrollWheelZoom.disable());
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 12, className: 'tiles-dark',
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    }).addTo(map);
+    overlay = L.layerGroup().addTo(map);
+    pin = L.marker([state.lat, state.lon], { draggable: true, icon: L.divIcon({ className: '', html: '<div class="pin"></div>', iconSize: [18, 18], iconAnchor: [9, 9] }) }).addTo(map);
+    pin.on('dragend', () => { const p = pin.getLatLng(); setPos(p.lat, p.lng); });
+    map.on('click', e => setPos(e.latlng.lat, e.latlng.lng));
+  } else {
+    $('map').innerHTML = '<p class="hint" style="padding:16px">Map could not be loaded (offline?). Enter your position manually — the calculator still works.</p>';
+  }
+
+  function footprint(satLon) {
+    const pts = [], sg = Math.sin(HORIZON_GAMMA), cg = Math.cos(HORIZON_GAMMA);
+    for (let i = 0; i <= 120; i++) {
+      const t = i / 120 * 2 * Math.PI;
+      pts.push([deg(Math.asin(sg * Math.cos(t))), satLon + deg(Math.atan2(Math.sin(t) * sg, cg))]);
+    }
+    return pts;
+  }
+  function greatCircle(lat, lon, satLon) {
+    const d = norm180(satLon - lon), a = [Math.cos(rad(lat)), 0, Math.sin(rad(lat))];
+    const b = [Math.cos(rad(d)), Math.sin(rad(d)), 0];
+    const w = Math.acos(Math.max(-1, Math.min(1, a[0] * b[0]))), pts = [];
+    for (let i = 0; i <= 48; i++) {
+      const f = i / 48, A = w < 1e-9 ? 1 - f : Math.sin((1 - f) * w) / Math.sin(w), B = w < 1e-9 ? f : Math.sin(f * w) / Math.sin(w);
+      const x = A * a[0] + B * b[0], y = B * b[1], z = A * a[2];
+      pts.push([deg(Math.atan2(z, Math.hypot(x, y))), lon + deg(Math.atan2(y, x))]);
+    }
+    return pts;
+  }
+  function drawMap(pan, visible) {
+    if (!map) return;
+    pin.setLatLng([state.lat, state.lon]);
+    if (pan) map.panTo([state.lat, state.lon]);
+    overlay.clearLayers();
+    const fp = footprint(state.satLon), gc = greatCircle(state.lat, state.lon, state.satLon);
+    const all = SATS.map(s => ({ lon: s.lon, label: s.name, on: s.id === state.satId }));
+    if (state.satId === 'custom') all.push({ lon: state.satLon, label: 'Custom', on: true });
+    for (const off of [-360, 0, 360]) {
+      L.polygon(fp.map(p => [p[0], p[1] + off]), { color: '#5fd4ff', weight: 1, opacity: .7, fillOpacity: .07, interactive: false }).addTo(overlay);
+      L.polyline(gc.map(p => [p[0], p[1] + off]), { color: visible ? '#5fd4ff' : '#f87171', weight: 2, dashArray: '6 6', interactive: false }).addTo(overlay);
+      for (const s of all) {
+        L.marker([0, s.lon + off], { interactive: false, icon: L.divIcon({ className: '', iconSize: [0, 0], html: `<div class="satpin${s.on ? ' on' : ''}"><span>✦</span>${s.label}</div>` }) }).addTo(overlay);
+      }
+    }
+  }
+
+  // ---------- Results ----------
+  let sol = look(state.lat, state.lon, state.satLon);
+  function update(pan) {
+    const sat = SATS.find(s => s.id === state.satId);
+    state.satLabel = sat ? sat.name : 'Custom slot';
+    sol = look(state.lat, state.lon, state.satLon);
+    const vis = sol.el >= 0;
+
+    document.querySelectorAll('.sat').forEach(b => {
+      const s = SATS.find(x => x.id === b.dataset.id), e = look(state.lat, state.lon, s.lon).el;
+      b.setAttribute('aria-pressed', String(s.id === state.satId));
+      const tag = b.querySelector('.el');
+      tag.className = 'el ' + elClass(e);
+      tag.textContent = e < 0 ? 'no LOS' : `EL ${e.toFixed(0)}°`;
+    });
+
+    $('azV').innerHTML = sol.overhead ? 'N/A' : `${sol.az.toFixed(1)}°<sup>T</sup>`;
+    $('azS').textContent = sol.overhead ? 'Satellite is at zenith'
+      : state.variation === null ? 'True bearing'
+      : `${(((sol.az - state.variation) % 360 + 360) % 360).toFixed(1)}° magnetic`;
+    $('elV').textContent = `${sol.el.toFixed(1)}°`;
+    $('elS').textContent = vis ? 'Above horizon' : 'Below horizon';
+
+    const st = $('status');
+    st.className = 'status ' + elClass(sol.el);
+    st.textContent = !vis ? `No line of sight — ${state.satLabel} is below your horizon. Pick another satellite.`
+      : sol.el < 10 ? 'Marginal look angle — expect blockage from superstructure, terrain and sea-surface multipath.'
+      : 'Clear look angle. Point the antenna to the azimuth and elevation above.';
+    $('dSat').textContent = `${state.satLabel} @ ${fmtLon(state.satLon)}`;
+    $('dPos').textContent = `${fmtDDM(state.lat, true)}, ${fmtDDM(state.lon, false)}`;
+    $('dRange').textContent = `${Math.round(sol.range).toLocaleString()} km (${Math.round(sol.range / 1.852).toLocaleString()} NM)`;
+    $('dDelay').textContent = `${(sol.range / C * 1000).toFixed(0)} ms`;
+    drawMap(pan, vis);
+    if (!animating) drawScene(performance.now());
+  }
+
+  // ---------- Animated scene ----------
+  const cv = $('scene'), ctx = cv.getContext('2d');
+  let W = 0, H = 0, stars = [];
+  const anim = { el: sol.el, shipX: null };
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let animating = !reduced;
+
+  function resize() {
+    const r = cv.getBoundingClientRect(), dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = Math.max(280, r.width); H = Math.max(260, r.height);
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    stars = Array.from({ length: Math.round(W * H / 2600) }, () => ({ x: rnd() * W, y: rnd() * H * .7, r: rnd() * 1.2 + .3, p: rnd() * 6.28, s: rnd() * 1.5 + .5 }));
+    if (!animating) drawScene(performance.now());
+  }
+
+  function wave(t, base, amp, len, speed, fill) {
+    ctx.beginPath(); ctx.moveTo(0, H);
+    for (let x = 0; x <= W + 8; x += 8) {
+      ctx.lineTo(x, base + Math.sin(x / len + t * speed) * amp + Math.sin(x / (len * .37) + t * speed * 1.7) * amp * .35);
+    }
+    ctx.lineTo(W, H); ctx.closePath(); ctx.fillStyle = fill; ctx.fill();
+  }
+
+  function drawShip(x, y, k, dir, roll) {
+    ctx.save(); ctx.translate(x, y); ctx.rotate(roll); ctx.scale(k * dir, k);
+    // superstructure
+    ctx.fillStyle = '#dfe6ee';
+    ctx.fillRect(-58, -38, 92, 16);            // deckhouse
+    ctx.fillRect(-12, -54, 42, 16);            // bridge
+    ctx.fillStyle = '#c9d2dc'; ctx.fillRect(-46, -52, 16, 14);   // stack
+    ctx.fillStyle = '#1a2636'; ctx.fillRect(-46, -52, 16, 4);
+    ctx.fillStyle = '#16304d'; ctx.fillRect(-6, -50, 34, 5);     // bridge windows
+    for (let i = 0; i < 6; i++) ctx.fillRect(-52 + i * 13, -33, 6, 4);
+    // deck gun + flight deck rail
+    ctx.fillStyle = '#b9c3ce'; ctx.fillRect(56, -32, 10, 8); ctx.fillRect(64, -30, 16, 2.5);
+    ctx.strokeStyle = '#b9c3ce'; ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.moveTo(-98, -27); ctx.lineTo(-60, -27); ctx.stroke();
+    // mast
+    ctx.strokeStyle = '#dfe6ee'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(8, -54); ctx.lineTo(8, -90); ctx.stroke();
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(-4, -72); ctx.lineTo(20, -72); ctx.moveTo(0, -80); ctx.lineTo(16, -80); ctx.stroke();
+    // hull
+    const hull = new Path2D();
+    hull.moveTo(-102, -22); hull.lineTo(110, -26); hull.quadraticCurveTo(100, -6, 84, 10); hull.lineTo(-94, 10); hull.closePath();
+    ctx.fillStyle = '#f4f7fa'; ctx.fill(hull);
+    ctx.save(); ctx.clip(hull);
+    ctx.fillStyle = '#e8452c'; ctx.beginPath(); ctx.moveTo(60, -28); ctx.lineTo(76, -28); ctx.lineTo(58, 12); ctx.lineTo(42, 12); ctx.fill();
+    ctx.fillStyle = '#1f55a8'; ctx.beginPath(); ctx.moveTo(80, -28); ctx.lineTo(85, -28); ctx.lineTo(67, 12); ctx.lineTo(62, 12); ctx.fill();
+    ctx.fillStyle = 'rgba(10,30,60,.18)'; ctx.fillRect(-110, 0, 230, 14);
+    ctx.restore();
+    ctx.restore();
+  }
+
+  function drawAntenna(A, theta, k) {
+    ctx.save(); ctx.translate(A.x, A.y); ctx.rotate(theta);
+    ctx.strokeStyle = '#ffd27a'; ctx.lineCap = 'round'; ctx.lineWidth = 2.2 * k;
+    ctx.beginPath(); ctx.moveTo(-4 * k, 0); ctx.lineTo(22 * k, 0); ctx.stroke();
+    ctx.lineWidth = 1.6 * k;
+    [[0, 9], [7, 7.5], [14, 6], [21, 4.5]].forEach(([x, h]) => { ctx.beginPath(); ctx.moveTo(x * k, -h * k); ctx.lineTo(x * k, h * k); ctx.stroke(); });
+    ctx.restore();
+    ctx.fillStyle = '#ffd27a'; ctx.beginPath(); ctx.arc(A.x, A.y, 3 * k, 0, 6.3); ctx.fill();
+  }
+
+  function drawSat(S, rot, k, alpha, glow) {
+    ctx.save(); ctx.globalAlpha = alpha; ctx.translate(S.x, S.y);
+    const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 70 * k);
+    g.addColorStop(0, `rgba(95,212,255,${.18 + glow * .25})`); g.addColorStop(1, 'rgba(95,212,255,0)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, 70 * k, 0, 6.3); ctx.fill();
+    ctx.rotate(rot); ctx.scale(k, k);
+    for (const sx of [-1, 1]) {   // solar wings
+      ctx.fillStyle = '#244f9c'; ctx.strokeStyle = '#7fb0ff'; ctx.lineWidth = .8;
+      ctx.fillRect(sx * 14, -7, sx * 42, 14); ctx.strokeRect(sx * 14, -7, sx * 42, 14);
+      ctx.beginPath();
+      for (let i = 1; i < 6; i++) { ctx.moveTo(sx * (14 + i * 7), -7); ctx.lineTo(sx * (14 + i * 7), 7); }
+      ctx.moveTo(sx * 14, 0); ctx.lineTo(sx * 56, 0); ctx.stroke();
+    }
+    ctx.strokeStyle = '#d9a441'; ctx.lineWidth = 1.4;   // reflector boom + mesh dish
+    ctx.beginPath(); ctx.moveTo(0, 10); ctx.lineTo(0, 26); ctx.stroke();
+    ctx.fillStyle = 'rgba(217,164,65,.22)';
+    ctx.beginPath(); ctx.ellipse(0, 30, 26, 8, 0, 0, 6.3); ctx.fill(); ctx.stroke();
+    ctx.lineWidth = .6; ctx.beginPath();
+    for (let i = -2; i <= 2; i++) { ctx.moveTo(i * 9, 30 - 7.5 * Math.sqrt(1 - (i * 9 / 26) ** 2)); ctx.lineTo(i * 9, 30 + 7.5 * Math.sqrt(1 - (i * 9 / 26) ** 2)); }
+    ctx.moveTo(-26, 30); ctx.lineTo(26, 30); ctx.stroke();
+    ctx.fillStyle = '#e2b352'; ctx.fillRect(-10, -12, 20, 24);   // bus
+    ctx.fillStyle = '#9a7326'; ctx.fillRect(-10, -2, 20, 3);
+    ctx.restore();
+  }
+
+  function label(text, x, y, color, align, size) {
+    ctx.font = `600 ${size || 12}px system-ui, sans-serif`; ctx.textAlign = align || 'center'; ctx.textBaseline = 'middle';
+    ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(5,11,26,.85)'; ctx.strokeText(text, x, y);
+    ctx.fillStyle = color; ctx.fillText(text, x, y);
+  }
+
+  function drawCompass(cx, cy, R) {
+    ctx.save(); ctx.translate(cx, cy);
+    ctx.fillStyle = 'rgba(7,17,31,.7)'; ctx.strokeStyle = '#35608f'; ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.arc(0, 0, R, 0, 6.3); ctx.fill(); ctx.stroke();
+    for (let d = 0; d < 360; d += 30) {
+      const a = rad(d - 90), r1 = R - (d % 90 === 0 ? 8 : 4);
+      ctx.beginPath(); ctx.moveTo(Math.cos(a) * r1, Math.sin(a) * r1); ctx.lineTo(Math.cos(a) * R, Math.sin(a) * R); ctx.stroke();
+    }
+    ctx.font = '600 10px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    [['N', 0, '#ff5a36'], ['E', 90, '#8aa0ba'], ['S', 180, '#8aa0ba'], ['W', 270, '#8aa0ba']].forEach(([t, d, c]) => {
+      const a = rad(d - 90); ctx.fillStyle = c; ctx.fillText(t, Math.cos(a) * (R - 15), Math.sin(a) * (R - 15));
+    });
+    if (!sol.overhead) {
+      const a = rad(sol.az - 90), c = sol.el >= 0 ? '#5fd4ff' : '#f87171', L = R - 24;
+      ctx.strokeStyle = c; ctx.fillStyle = c; ctx.lineWidth = 2.2;
+      ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(Math.cos(a) * L, Math.sin(a) * L); ctx.stroke();
+      ctx.save(); ctx.rotate(a); ctx.beginPath(); ctx.moveTo(L + 6, 0); ctx.lineTo(L - 3, -5); ctx.lineTo(L - 3, 5); ctx.fill(); ctx.restore();
+    }
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(0, 0, 3, 0, 6.3); ctx.fill();
+    ctx.restore();
+    label(sol.overhead ? 'ZENITH' : `AZ ${sol.az.toFixed(1)}° T`, cx, cy + R + 14, '#e6eef8');
+  }
+
+  function drawScene(now) {
+    if (!W) return;
+    const t = reduced ? 0 : now / 1000;
+    const dir = Math.sin(rad(sol.az)) >= 0 || sol.overhead ? 1 : -1;
+    const vis = sol.el >= 0;
+    const targetX = dir > 0 ? W * .26 : W * .74;
+    if (anim.shipX === null || reduced) { anim.shipX = targetX; anim.el = sol.el; }
+    anim.shipX += (targetX - anim.shipX) * .07; anim.el += (sol.el - anim.el) * .08;
+    const horizon = H * .7, k = Math.max(.6, Math.min(1.1, W / 820));
+
+    // sky
+    const sky = ctx.createLinearGradient(0, 0, 0, horizon);
+    sky.addColorStop(0, '#040916'); sky.addColorStop(.7, '#0b1f3d'); sky.addColorStop(1, '#17406b');
+    ctx.fillStyle = sky; ctx.fillRect(0, 0, W, H);
+    for (const s of stars) {
+      if (s.y > horizon - 6) continue;
+      ctx.globalAlpha = (.45 + .45 * Math.sin(t * s.s + s.p)) * (1 - s.y / horizon * .6);
+      ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, 6.3); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    // geometry
+    const bob = Math.sin(t * 1.3) * 3 * k, roll = Math.sin(t * .9 + 1) * .018;
+    const shipY = horizon + 30 * k + bob;
+    const A = { x: anim.shipX + dir * 8 * k, y: shipY - 92 * k };
+    const elr = rad(Math.max(0, Math.min(90, anim.el)));
+    const ux = dir * Math.cos(elr), uy = -Math.sin(elr);
+    const mx = 74 * k, my = 62 * k;
+    const tx = Math.abs(ux) > 1e-6 ? ((dir > 0 ? W - mx : mx) - A.x) / ux : Infinity;
+    const ty = Math.abs(uy) > 1e-6 ? (my - A.y) / uy : Infinity;
+    const Lb = Math.max(60, Math.min(tx, ty));
+    const S = { x: A.x + ux * Lb, y: A.y + uy * Lb };
+    const theta = Math.atan2(uy, ux);
+
+    // beam
+    const hit = vis ? Math.max(0, Math.sin(t * 5)) : 0;
+    if (vis) {
+      const bg = ctx.createLinearGradient(A.x, A.y, S.x, S.y);
+      bg.addColorStop(0, 'rgba(95,212,255,.5)'); bg.addColorStop(1, 'rgba(95,212,255,.08)');
+      ctx.strokeStyle = bg; ctx.lineWidth = 1.5; ctx.setLineDash([3, 7]);
+      ctx.beginPath(); ctx.moveTo(A.x, A.y); ctx.lineTo(S.x, S.y); ctx.stroke(); ctx.setLineDash([]);
+      const n = Math.max(4, Math.round(Lb / 55));
+      ctx.lineCap = 'round';
+      for (let i = 0; i < n; i++) {
+        const r = ((t * 110 + i * Lb / n) % Lb);
+        if (r < 16 * k || r > Lb - 30 * k) continue;
+        const half = (9 + 16 * r / Lb) * k / r;
+        ctx.strokeStyle = `rgba(95,212,255,${Math.sin(Math.PI * r / Lb) * .9})`; ctx.lineWidth = 2.4;
+        ctx.beginPath(); ctx.arc(A.x, A.y, r, theta - half, theta + half); ctx.stroke();
+      }
+    } else {
+      ctx.strokeStyle = 'rgba(248,113,113,.7)'; ctx.lineWidth = 1.5; ctx.setLineDash([6, 8]);
+      ctx.beginPath(); ctx.moveTo(A.x, A.y); ctx.lineTo(S.x, S.y); ctx.stroke(); ctx.setLineDash([]);
+    }
+    drawSat(S, Math.atan2(A.y - S.y, A.x - S.x) - Math.PI / 2 + Math.sin(t * .4) * .03, k * .95, vis ? 1 : .3, hit);
+    const lblAbove = S.y > 110 * k;
+    label(`${state.satLabel} · ${fmtLon(state.satLon)}`, Math.max(90, Math.min(W - 90, S.x)), S.y + (lblAbove ? -52 : 58) * k, vis ? '#e6eef8' : '#f87171');
+    if (vis) label(`${Math.round(sol.range).toLocaleString()} km`, Math.max(90, Math.min(W - 90, S.x)), S.y + (lblAbove ? -52 : 58) * k + 16, '#8aa0ba', 'center', 11);
+    else label('BELOW HORIZON · NO LINK', W / 2, horizon * .4, '#f87171', 'center', 15);
+
+    // sea, ship, sea
+    wave(t, horizon, 2.5, 60, .5, '#0f3558');
+    wave(t, horizon + 14 * k, 4, 85, .8, '#0c2c4b');
+    drawShip(anim.shipX, shipY, k, dir, roll);
+    drawAntenna(A, theta, k);
+    wave(t, horizon + 36 * k, 5, 70, 1.2, '#0a2440');
+    wave(t, horizon + 62 * k, 6, 110, .9, '#071b31');
+
+    // elevation arc
+    const R = 50 * k;
+    ctx.strokeStyle = 'rgba(230,238,248,.45)'; ctx.lineWidth = 1; ctx.setLineDash([4, 5]);
+    ctx.beginPath(); ctx.moveTo(A.x, A.y); ctx.lineTo(A.x + dir * (R + 34 * k), A.y); ctx.stroke(); ctx.setLineDash([]);
+    if (vis && elr > .01) {
+      ctx.strokeStyle = '#ffd27a'; ctx.lineWidth = 1.6; ctx.beginPath();
+      if (dir > 0) ctx.arc(A.x, A.y, R, 0, -elr, true); else ctx.arc(A.x, A.y, R, Math.PI, Math.PI + elr, false);
+      ctx.stroke();
+    }
+    const mid = Math.max(rad(9), elr / 2);
+    label(`EL ${sol.el.toFixed(1)}°`, A.x + dir * Math.cos(mid) * (R + 34 * k), A.y - Math.sin(mid) * (R + 34 * k) + (elr < rad(18) ? 14 : 0), '#ffd27a');
+
+    // compass (corner opposite the satellite)
+    const cr = Math.max(34, 46 * k);
+    drawCompass(dir > 0 ? cr + 18 : W - cr - 18, cr + 18, cr);
+  }
+
+  function frame(now) { drawScene(now); requestAnimationFrame(frame); }
+  new ResizeObserver(resize).observe(cv);
+  resize();
+
+  // ---------- Init ----------
+  $('lat').value = fmtDDM(state.lat, true); $('lon').value = fmtDDM(state.lon, false);
+  showEcho('lat', state.lat, true); showEcho('lon', state.lon, false);
+  update();
+  if (animating) requestAnimationFrame(frame);
+  window.__muos = { look, parseCoord };
+})();
+</script>
+</body>
+</html>
