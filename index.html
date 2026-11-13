@@ -58,14 +58,14 @@
   .sats { display: grid; gap: 8px; }
   .sat {
     display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: center;
-    width: 100%; text-align: left; padding: 10px 12px; border-radius: 8px; cursor: pointer;
+    width: 100%; text-align: left; padding: 8px 12px; border-radius: 8px; cursor: pointer;
     background: var(--panel-2); border: 1px solid var(--line); color: var(--text); font: inherit;
   }
   .sat:hover { border-color: #35608f; }
   .sat[aria-pressed="true"] { border-color: var(--signal); box-shadow: 0 0 0 1px var(--signal) inset; background: #132c47; }
   .sat b { font-weight: 600; }
   .sat small { color: var(--muted); grid-column: 1; }
-  .sat .el { grid-column: 2; grid-row: 1 / span 2; font-family: var(--mono); font-size: 13px; padding: 3px 8px; border-radius: 999px; background: #0a1626; white-space: nowrap; }
+  .sat .el { grid-column: 2; font-family: var(--mono); font-size: 13px; padding: 3px 8px; border-radius: 999px; background: #0a1626; white-space: nowrap; }
   .el.good { color: var(--good); } .el.warn { color: var(--warn); } .el.bad { color: var(--bad); }
   .custom { display: flex; gap: 8px; align-items: center; margin-top: 10px; font-size: 13px; color: var(--muted); }
   .custom input { flex: 1; }
@@ -133,7 +133,7 @@
       <div class="sats" id="sats"></div>
       <div class="custom">
         <span>Other slot:</span>
-        <input id="customLon" placeholder="e.g. 105 W" aria-label="Custom satellite longitude">
+        <input id="customLon" placeholder="e.g. 24 W" aria-label="Custom satellite longitude">
       </div>
       <div class="echo" id="customEcho"></div>
     </section>
@@ -203,12 +203,14 @@
   const RE = 6378.137, RS = 42164.17, C = 299792.458;
   const HORIZON_GAMMA = Math.acos(RE / RS); // central angle at 0° elevation
   const SATS = [
-    { id: 'pac', name: 'MUOS-1', region: 'Pacific', lon: -177 },
-    { id: 'conus', name: 'MUOS-2', region: 'CONUS / Americas', lon: -100 },
-    { id: 'lant', name: 'MUOS-3', region: 'Atlantic', lon: -15.5 },
-    { id: 'io', name: 'MUOS-4', region: 'Indian Ocean', lon: 75 },
+    { id: 'pac', region: 'Pacific', lon: -177 },
+    { id: 'conus105', region: 'CONUS', lon: -105, up: true },
+    { id: 'conus100', region: 'CONUS', lon: -100 },
+    { id: 'lant', region: 'Atlantic', lon: -15.5 },
+    { id: 'io72', region: 'Indian Ocean', lon: 72, up: true },
+    { id: 'io75', region: 'Indian Ocean', lon: 75 },
   ];
-  const state = { satId: 'conus', satLon: -100, satLabel: '', lat: 36.8533, lon: -75.5, variation: null };
+  const state = { satId: 'conus100', satLon: -100, satLabel: '', lat: 36.8533, lon: -75.5, variation: null };
 
   const rad = d => d * Math.PI / 180, deg = r => r * 180 / Math.PI;
   const norm180 = d => ((d + 540) % 360 + 360) % 360 - 180;
@@ -258,7 +260,7 @@
   SATS.forEach(s => {
     const b = document.createElement('button');
     b.type = 'button'; b.className = 'sat'; b.dataset.id = s.id;
-    b.innerHTML = `<b>${s.name} · ${s.region}</b><small>${fmtLon(s.lon)}</small><span class="el"></span>`;
+    b.innerHTML = `<b>${s.region} · ${fmtLon(s.lon)}</b><span class="el"></span>`;
     b.addEventListener('click', () => {
       state.satId = s.id; state.satLon = s.lon;
       $('customLon').value = ''; $('customLon').classList.remove('invalid'); $('customEcho').textContent = '';
@@ -362,13 +364,13 @@
     if (pan) map.panTo([state.lat, state.lon]);
     overlay.clearLayers();
     const fp = footprint(state.satLon), gc = greatCircle(state.lat, state.lon, state.satLon);
-    const all = SATS.map(s => ({ lon: s.lon, label: s.name, on: s.id === state.satId }));
+    const all = SATS.map(s => ({ lon: s.lon, label: fmtLon(s.lon).replace('° ', ''), up: s.up, on: s.id === state.satId }));
     if (state.satId === 'custom') all.push({ lon: state.satLon, label: 'Custom', on: true });
     for (const off of [-360, 0, 360]) {
       L.polygon(fp.map(p => [p[0], p[1] + off]), { color: '#5fd4ff', weight: 1, opacity: .7, fillOpacity: .07, interactive: false }).addTo(overlay);
       L.polyline(gc.map(p => [p[0], p[1] + off]), { color: visible ? '#5fd4ff' : '#f87171', weight: 2, dashArray: '6 6', interactive: false }).addTo(overlay);
       for (const s of all) {
-        L.marker([0, s.lon + off], { interactive: false, icon: L.divIcon({ className: '', iconSize: [0, 0], html: `<div class="satpin${s.on ? ' on' : ''}"><span>✦</span>${s.label}</div>` }) }).addTo(overlay);
+        L.marker([0, s.lon + off], { interactive: false, icon: L.divIcon({ className: '', iconSize: [0, 0], html: `<div class="satpin${s.on ? ' on' : ''}">${s.up ? s.label : '&nbsp;'}<span>✦</span>${s.up ? '&nbsp;' : s.label}</div>` }) }).addTo(overlay);
       }
     }
   }
@@ -377,7 +379,7 @@
   let sol = look(state.lat, state.lon, state.satLon);
   function update(pan) {
     const sat = SATS.find(s => s.id === state.satId);
-    state.satLabel = sat ? sat.name : 'Custom slot';
+    state.satLabel = sat ? `MUOS ${sat.region}` : 'Custom slot';
     sol = look(state.lat, state.lon, state.satLon);
     const vis = sol.el >= 0;
 
@@ -398,7 +400,7 @@
 
     const st = $('status');
     st.className = 'status ' + elClass(sol.el);
-    st.textContent = !vis ? `No line of sight — ${state.satLabel} is below your horizon. Pick another satellite.`
+    st.textContent = !vis ? `No line of sight — ${state.satLabel} (${fmtLon(state.satLon)}) is below your horizon. Pick another satellite.`
       : sol.el < 10 ? 'Marginal look angle — expect blockage from superstructure, terrain and sea-surface multipath.'
       : 'Clear look angle. Point the antenna to the azimuth and elevation above.';
     $('dSat').textContent = `${state.satLabel} @ ${fmtLon(state.satLon)}`;
